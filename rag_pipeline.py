@@ -5,7 +5,7 @@ Handles PDF loading, chunking, FAISS indexing, and QA chain construction.
 """
  
 import os
-from typing import List, Tuple
+from typing import List, Tuple, Optional
  
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -18,8 +18,7 @@ from langchain_core.prompts import PromptTemplate
  
 # ── Constants ─────────────────────────────────────────────────────────────────
 INDEX_DIR = "faiss_index"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"   # free, runs locally
- 
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
  
 QA_PROMPT_TEMPLATE = """You are an expert research paper assistant. Your job is to help users understand academic papers clearly and thoroughly.
@@ -48,10 +47,6 @@ def load_and_chunk_pdf(
     chunk_size: int = 500,
     chunk_overlap: int = 50,
 ) -> Tuple[list, int]:
-    """
-    Load a PDF, split into chunks, return (chunks, num_pages).
-    Uses PyMuPDF for robust PDF parsing.
-    """
     loader = PyMuPDFLoader(pdf_path)
     documents = loader.load()
     num_pages = len(documents)
@@ -67,7 +62,6 @@ def load_and_chunk_pdf(
  
 # ── FAISS Vector Store ────────────────────────────────────────────────────────
 def _get_embeddings() -> HuggingFaceEmbeddings:
-    """Return a cached HuggingFace embedding model (runs locally, no API key)."""
     return HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
         model_kwargs={"device": "cpu"},
@@ -76,19 +70,17 @@ def _get_embeddings() -> HuggingFaceEmbeddings:
  
  
 def build_faiss_index(chunks: list) -> FAISS:
-    """Embed chunks and build an in-memory FAISS vector store."""
     embeddings = _get_embeddings()
     vectorstore = FAISS.from_documents(chunks, embeddings)
     return vectorstore
  
  
 def save_index(vectorstore: FAISS, path: str = INDEX_DIR):
-    """Persist FAISS index to disk."""
     vectorstore.save_local(path)
  
  
-def load_index(path: str = INDEX_DIR) -> FAISS | None:
-    """Load a previously saved FAISS index from disk. Returns None if not found."""
+def load_index(path: str = INDEX_DIR) -> Optional[FAISS]:
+    # Optional[FAISS] instead of FAISS | None — compatible with Python 3.9
     if not os.path.exists(path):
         return None
     embeddings = _get_embeddings()
@@ -96,15 +88,11 @@ def load_index(path: str = INDEX_DIR) -> FAISS | None:
  
  
 # ── QA Chain ──────────────────────────────────────────────────────────────────
-def build_qa_chain(vectorstore: FAISS, model: str = "llama-3.3-70b-versatile", top_k: int = 6):
-    """
-    Build a RAG chain using LCEL (LangChain Expression Language):
-      - Groq-hosted LLM (OpenAI-compatible endpoint)
-      - FAISS retriever
-      - Custom prompt
-    Returns a callable that accepts {"query": "..."} and returns
-    {"result": "...", "source_documents": [...]} to stay compatible with app.py
-    """
+def build_qa_chain(
+    vectorstore: FAISS,
+    model: str = "llama-3.3-70b-versatile",
+    top_k: int = 6,
+):
     groq_api_key = os.getenv("GROQ_API_KEY")
     if not groq_api_key:
         raise ValueError("GROQ_API_KEY environment variable is not set.")
@@ -130,7 +118,6 @@ def build_qa_chain(vectorstore: FAISS, model: str = "llama-3.3-70b-versatile", t
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
  
-    # LCEL chain
     chain = (
         {
             "context": retriever | format_docs,
@@ -141,9 +128,6 @@ def build_qa_chain(vectorstore: FAISS, model: str = "llama-3.3-70b-versatile", t
         | StrOutputParser()
     )
  
-    # Wrap into a callable that matches the app.py interface:
-    # input:  {"query": "..."}
-    # output: {"result": "...", "source_documents": [...]}
     def qa_chain(inputs: dict) -> dict:
         query = inputs["query"]
         source_docs = retriever.invoke(query)
@@ -151,4 +135,5 @@ def build_qa_chain(vectorstore: FAISS, model: str = "llama-3.3-70b-versatile", t
         return {"result": result, "source_documents": source_docs}
  
     return qa_chain
+ 
  
