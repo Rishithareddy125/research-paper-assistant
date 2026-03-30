@@ -8,7 +8,7 @@ conversation with it — getting instant, accurate answers to any question.
 ---
 
 ##  Live Demo
-Coming soon...
+https://paper-mind-app.streamlit.app/
 
 ---
 
